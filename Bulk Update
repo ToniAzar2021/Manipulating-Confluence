@@ -1,0 +1,163 @@
+import openpyxl
+import json
+import requests
+import base64
+import getpass  #getpass.getpass('Please enter password\n')
+import pandas as pd
+from datetime import date
+from datetime import datetime
+
+
+#Creating a sheet with headers
+wblog = openpyxl.load_workbook('CS_log.xlsx')
+wblog.create_sheet(str(datetime.now().strftime("%d-%m-%Y__%H-%M-%S")),0)
+wslog = wblog[str(datetime.now().strftime("%d-%m-%Y__%H-%M-%S"))]
+wslog.append(('page_title','page_id','read_result','write_result'))
+
+# Building Authorization
+message = 'DJC5983:'+ '7ck86B429v'  #getpass.getpass('please enter your password')
+message_bytes = message.encode('ascii')
+message_base64_encoded = base64.b64encode(message_bytes)
+message_base64_decoded =  message_base64_encoded.decode('ascii')
+
+#Requests Headers
+confluence_headers = {
+    "Accept":"application/json",
+    "content-type" : "application/json",
+    'X-Atlassian-Token' : 'nocheck',
+    'Authorization' : 'Basic '+message_base64_decoded
+}
+
+#reading Excel file
+wb = openpyxl.load_workbook('DataEntry_Prod.xlsx')
+
+# Accessing the sheet
+#ws = wb['TestImport']
+ws = wb['Import_1']
+
+# Reading Excel File Headers
+excel_headers= []
+for row in ws.iter_rows(min_row=2,max_row=2,min_col=2,values_only=True):
+    for i in range(len(row)):
+        excel_headers.append(row[i])
+
+# Reading Excel File Col index
+excel_col_index = []
+for row in ws.iter_rows(min_row=1,max_row=1,min_col=2,values_only=True):
+    for i in range(len(row)):
+        excel_col_index.append(row[i])
+
+# Building Dictionary for Excel Mapping
+dict_index_excel = {excel_headers[i]:excel_col_index[i] for i in range(len(excel_headers))}
+
+
+for row in ws.iter_rows(min_row=3,min_col=2,values_only=True):
+
+    log_list = []
+    log_list.append(row[0])
+    log_list.append(row[1])
+
+    # Reading Scaffolding info from page
+    print('Reading Page:'+str(row[0]))
+    base_confluence_uri = 'https://confluence.desjardins.com'
+    relative_confluence = '/rest/scaffolding/1.0/api/form/'+str(row[1])+'/'  
+    url = base_confluence_uri + relative_confluence
+    get_scaffoling_response = requests.get(url,verify=False,headers=confluence_headers)
+    print('Reading Scaffolding response for:'+str(row[0]));print(get_scaffoling_response.status_code)
+
+    if get_scaffoling_response.status_code != 200:
+        log_list.append('reading_FAIL')
+    else:
+        log_list.append('reading_SUCCESS')
+
+    get_scaffolding_json = json.loads(get_scaffoling_response.text)
+    dict_index_scaf = {'index_'+excel_headers[i]:'Index not found' for i in range(2,len(excel_headers))}
+    
+    for i in range(len(get_scaffolding_json)):
+        for e in excel_headers:
+            if get_scaffolding_json[i]['name'] == e:
+                dict_index_scaf['index_' + e] = i
+
+ 
+    list_data_macros = []
+    date_data_macros = []
+    text_data_macros = []
+
+    for j in list(dict_index_scaf.values()):
+        if get_scaffolding_json[j]['macro'] == 'list-data':
+            list_data_macros.append(get_scaffolding_json[j]['name'])
+        elif get_scaffolding_json[j]['macro'] == 'date-data':
+            date_data_macros.append(get_scaffolding_json[j]['name'])
+        else:
+            text_data_macros.append(get_scaffolding_json[j]['name'])
+
+    dict_macro_type = {
+        "list-data":list_data_macros,
+        "text-data":text_data_macros,
+        "date-data":date_data_macros
+    }
+
+    for k in dict_macro_type.keys():
+        if k == 'date-data':
+            for v in dict_macro_type[k]:
+                if row[dict_index_excel[v]-2] !=None:
+                    get_scaffolding_json[dict_index_scaf['index_'+v]]['value'] = row[dict_index_excel[v] -2]+' 00:00:00'
+                    
+        elif k == 'list-data':
+            for v in dict_macro_type[k]:
+                if row[dict_index_excel[v]-2] !=None:
+                    if ';' in row[dict_index_excel[v]-2]:
+                        split_list = row[dict_index_excel[v]-2].split(';')
+                        get_scaffolding_json[dict_index_scaf['index_'+v]]['value']=[]
+                        for i in range(len(split_list)):
+                            # get_scaffolding_json[dict_index_scaf['index_'+v]]['value'].append('')
+                            # get_scaffolding_json[dict_index_scaf['index_'+v]]['value'][i]=split_list[i]
+                            get_scaffolding_json[dict_index_scaf['index_'+v]]['value'].append(split_list[i])
+                    else:
+                        get_scaffolding_json[dict_index_scaf['index_'+v]]['value'] = [row[dict_index_excel[v]-2]]
+
+                
+        else:#text-data #we might add table-data later on so this condition must be added
+            for v in dict_macro_type[k]:
+                if row[dict_index_excel[v]-2] !=None:
+                    get_scaffolding_json[dict_index_scaf['index_'+v]]['value'] = row[dict_index_excel[v] -2]
+                
+           
+
+    # # #Posting the page on confluence
+    payload = json.dumps(get_scaffolding_json)
+    update_response = requests.put(url=url,headers=confluence_headers,data=payload,verify=False)
+    print(update_response.status_code)
+    
+    if update_response.status_code != 200:
+        log_list.append('writing_FAIL')
+    else:
+        log_list.append('writing_SUCCESS')
+
+    wslog.append(tuple(log_list))
+
+wblog.save(filename='CS_log.xlsx')
+    # break
+
+#-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+# for i in range(5):
+#     print('\n')
+# print(get_scaffolding_json)
+# for i in range(5):
+#     print('\n')
+
+
+
+
+
+
+
+
+
+
+
+
+
+
