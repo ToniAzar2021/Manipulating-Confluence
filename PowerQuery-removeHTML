@@ -1,0 +1,90 @@
+let
+    Source = Json.Document(
+        Web.Contents(
+            "https://confluence.desjardins.com",
+            [
+                 RelativePath = "rest/api/content/search",
+                 Query=[
+                     start=Text.From(0),
+                     limit=Text.From(1000),
+                     cql = "space=SECINFO and type=page and title ~""Init"" "
+                 ]
+                 
+            ]
+        )
+    ),
+
+    a_extractingResults = Record.Field(Source,"results"),
+    b_listToTable = Table.FromList(a_extractingResults,Splitter.SplitByNothing()),
+    c_expandColumn1R = fnExpandListOfRecords(b_listToTable,"Column1"),
+    d_removeColumns = Table.RemoveColumns(c_expandColumn1R,List.LastN(Table.ColumnNames(c_expandColumn1R),3)&{"type","status"}),
+    d_1_remove_1070909598 = Table.SelectRows(d_removeColumns,each ([id] <> "1070909598")),
+    e_scafFoldEachID = Table.AddColumn(d_1_remove_1070909598,"id_scaf",each fnScafRestAPIGet_withoutCQL([id])),
+    f_expand_id_scaf_L = fnExpandListOfLists(e_scafFoldEachID,"id_scaf"),
+    g_expand_id_scaf_R = fnExpandListOfRecords(f_expand_id_scaf_L,"id_scaf"),
+    h_remove_title_macro = Table.RemoveColumns(g_expand_id_scaf_R,{"title","macro"}),
+    i_clean_value = Table.SelectRows(
+        h_remove_title_macro,
+        each ([value] <>"" and [value] <> null and [value] <> " ")
+    ),
+    #"Pivoted Column" = Table.Pivot(i_clean_value, List.Distinct(i_clean_value[name]), "name", "value"),
+
+    k_Transform_initiativeStatut = Table.TransformColumns(
+        #"Pivoted Column",
+        {
+            {
+                "initiativeStatut", each if Value.Is(_,type list) then _{0} else _
+            },
+            {
+                "initiativeTour", each if Value.Is(_,type list) then _{0} else _
+            }
+        }
+    ),
+
+    l_Transform_initiativeNature = Table.TransformColumns(
+        k_Transform_initiativeStatut,
+        {
+            {
+                "initiativeNature", each if Value.Is(_,type list) then _{0} else _
+            }
+        }
+    ),
+    m_filter_initID= Table.SelectRows(
+        l_Transform_initiativeNature,
+        each ([initiativeId] <> null)
+    ),
+    #"Removed Columns" = Table.RemoveColumns(m_filter_initID,{"id", "initiativeProvenance", "listeEpopee", "risquesProjet", "interpedendance", "RolesEfforts"}),
+//<p><ac:structured-macro ac:name="jira" ac:schema-version="1" ac:macro-id="2a68a77b-624d-4e55-8368-c229f9bbc45b"><ac:parameter ac:name="server">Jira</ac:parameter><ac:parameter 
+    Trans_initiativeIdJIRA = Table.TransformColumns(
+        #"Removed Columns",
+        {
+            {
+                "initiativeIdJIRA",each if _ <> null then Text.Replace(_,"ac:","") else _
+            }
+        }
+    ),
+    Trans_initiativeIdJIRA2 = Table.TransformColumns(
+        Trans_initiativeIdJIRA,
+        {
+            {
+                "initiativeIdJIRA",each if _ <> null then Html.Table(_,{{"text","parameter[name=""key""]"}}){0}[text] else _
+            }
+        }
+    ),
+    Trans_initiativeId = Table.TransformColumns(
+        Trans_initiativeIdJIRA2,
+        {
+            {
+                "initiativeId",each if _ <> null then Html.Table(_,{{"text",":root"}}){0}[text] else _
+            }
+        }
+    ),
+    #"Filtered Rows" = Table.SelectRows(Trans_initiativeId, each ([initiativeId] <> "Init.#0660")),
+    #"Removed Columns1" = Table.RemoveColumns(#"Filtered Rows",{"initiativeWsjfScoreMaturite", "initiativeWsjfScoreConformite", "initiativeWsjfScoreRisque", "initiativeWsjfScoreDesuetude", "initiativeWsjfScoreEffort"}),
+    #"Renamed Columns" = Table.RenameColumns(#"Removed Columns1",{{"InitiativeProjetNum", "Projet"}, {"initiativeFamilleNom", "Initiative Famille Nom"}, {"initiativeStatut", "Statut de l'initiative"}, {"initiativeId", "ID Initiative"}, {"initiativeNom", "Initiative Nom"}}),
+    #"Removed Columns2" = Table.RemoveColumns(#"Renamed Columns",{"impactUtilisateur", "impactArchitecture", "initiativeSiReconduite", "cont_SP", "commentaireServicePro", "cont_LL", "commentaireLogicielLicence", "cont_CM", "commentaireLogicielContratMaintenance", "cont_M", "commentaireMateriel", "cont_MCM", "commentaireMaterielContratMaintenance", "initiativeCommentaire", "Epopees_JIRA", "Nom court de l'initiative", "NoInitiative", "Description de l’initiative (Épopée SAFe)", "Dans la portée", "Hors portée", "Principaux indicateurs", "Motivations", "maturitéISO", "risqueSecInfo", "Fonctionnalités du produit minimum viable (MVP)", " Fonctionnalités potentielles supplémentaires", "Requis non-fonctionnels", "Impact sur les produits, programmes et services", "Utilisateurs et marchés concernés:", "Interpédendance", "Jalons ou points de contrôle", "Autres notes et commentaires", "promoteur", "scrumMaster_PM"})
+    // #"Added Custom" = Table.AddColumn(Trans_initiativeIdJIRA2, "EpicsTable", each if [ initiativeIdJIRA] <> null then fnExtractEpic([initiativeIdJIRA]) else [initiativeIdJIRA]),
+    // #"Expanded EpicsTable" = Table.ExpandTableColumn(#"Added Custom", "EpicsTable", {"Column1.outwardIssue.key", "Column1.outwardIssue.fields.summary", "Column1.outwardIssue.fields.status.name"}, {"EpicsTable.Column1.outwardIssue.key", "EpicsTable.Column1.outwardIssue.fields.summary", "EpicsTable.Column1.outwardIssue.fields.status.name"}),
+    // #"Renamed Columns" = Table.RenameColumns(#"Expanded EpicsTable",{{"EpicsTable.Column1.outwardIssue.key", "EPIC-Key"}, {"EpicsTable.Column1.outwardIssue.fields.summary", "EPIC-Summary"}, {"EpicsTable.Column1.outwardIssue.fields.status.name", "EPIC-Status"}})
+in
+    #"Removed Columns2"
